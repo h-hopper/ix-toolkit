@@ -1,7 +1,7 @@
 ---
 name: ix-save
 description: NEC IX の running-config を startup-config に保存する（write memory）。対象機器は --device で指定する。設定変更後の永続化に使用する
-argument-hint: "[機器名] (e.g., home)"
+argument-hint: "[機器名] (e.g., router-a)"
 allowed-tools:
   - Bash(uv:*)
   - Bash(python:*)
@@ -12,11 +12,13 @@ allowed-tools:
 
 `${CLAUDE_PLUGIN_ROOT}/scripts/ix-ssh.py --save` 経由で、現在の running-config を startup-config に保存する。
 
+`${CLAUDE_PLUGIN_ROOT}` は Claude Code が設定する。Codex では adapter の指示に従って ix-toolkit repository root の絶対パスへ置き換える。カレントディレクトリから推測しない。
+
 **save（write memory）を実行しないと、再起動時に設定が失われる。`/ix-configure` 実行後に必ず提案すること。**
 
 ## 接続先の指定
 
-機器はインベントリ `~/.claude/ix-devices.json` に定義し、`--device <名前>`（短縮 `-d`）で選ぶ。**既定機器は無い**。省略するとエラーと機器一覧が返る。
+機器はインベントリに定義し、`--device <名前>`（短縮 `-d`）で選ぶ。場所は `--inventory` / `$IX_INVENTORY`、`~/.config/ix-toolkit/ix-devices.json`、legacy `~/.claude/ix-devices.json` の順。**既定機器は無い**。省略するとエラーと機器一覧が返る。
 
 ```bash
 uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/ix-ssh.py --list

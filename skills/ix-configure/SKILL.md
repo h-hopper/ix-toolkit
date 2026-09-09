@@ -1,7 +1,7 @@
 ---
 name: ix-configure
 description: NEC IX に設定を投入する。config モードで設定行を適用する。対象機器は --device で指定する。ユーザーが NEC IX の設定変更・投入を求めたときに使用する
-argument-hint: "[機器名] [変更内容の説明] (e.g., home デフォルトルート追加)"
+argument-hint: "[機器名] [変更内容の説明] (e.g., router-a デフォルトルート追加)"
 allowed-tools:
   - Bash(uv:*)
   - Bash(python:*)
@@ -12,11 +12,13 @@ allowed-tools:
 
 `${CLAUDE_PLUGIN_ROOT}/scripts/ix-ssh.py --config` 経由で NEC IX に設定を投入する。
 
+`${CLAUDE_PLUGIN_ROOT}` は Claude Code が設定する。Codex では adapter の指示に従って ix-toolkit repository root の絶対パスへ置き換える。カレントディレクトリから推測しない。
+
 **これは破壊的操作である。投入前に必ず「対象機器」と「設定行」をユーザーに提示し、確認を取ること。**
 
 ## 接続先の指定
 
-機器はインベントリ `~/.claude/ix-devices.json` に定義し、`--device <名前>`（短縮 `-d`）で選ぶ。**既定機器は無い**。省略するとエラーと機器一覧が返る（設定が別の機器に流れ込む事故を防ぐための設計であり、埋め合わせに機器名を推測してはならない）。
+機器はインベントリに定義し、`--device <名前>`（短縮 `-d`）で選ぶ。場所は `--inventory` / `$IX_INVENTORY`、`~/.config/ix-toolkit/ix-devices.json`、legacy `~/.claude/ix-devices.json` の順。**既定機器は無い**。省略するとエラーと機器一覧が返る（設定が別の機器に流れ込む事故を防ぐための設計であり、埋め合わせに機器名を推測してはならない）。
 
 ```bash
 uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/ix-ssh.py --list

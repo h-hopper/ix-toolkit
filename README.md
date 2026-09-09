@@ -1,11 +1,12 @@
 # ix-toolkit
 
-NEC IX を [Claude Code](https://claude.com/claude-code) から
+NEC IX を [Claude Code](https://claude.com/claude-code) または OpenAI Codex から
 運用するための skill 一式と、その参照マニュアルを作る PDF → Markdown 変換ツール。
 
 ```
 .claude-plugin/ plugin manifest (これがあるので skills-dir plugin として載る)
-skills/        Claude Code の skill
+.agents/skills/ Codex Agent Skills の薄い adapter
+skills/        Claude Code の skill、および両 agent 共通の手順の正本
 scripts/       skill が呼ぶ NEC IX 用 SSH クライアント
 cmd/pdfbook/   PDF のマニュアルを Markdown に変換する
 profiles/      pdfbook の変換プロファイル
@@ -23,7 +24,16 @@ profiles/      pdfbook の変換プロファイル
 | `/ix-configure` | 設定を投入 | **破壊的**・実行前に確認必須 |
 | `/ix-save` | `write memory` で永続化 | **破壊的** |
 
-### インストール
+`ix-manual` は任意機能で、ローカル corpus が無くても `ix-show` / `ix-backup` /
+`ix-configure` / `ix-save` の実行基盤は利用できる。ただしコマンド構文や制約を確認できない場合、
+skill は NEC IX コマンドを推測せず不足を通知する。`ix-configure` と `ix-save` は実機状態を
+変更するため、対象機器と操作内容を提示して利用者の確認を得るまで実行しない。
+
+この public repository へ inventory、password/token、SSH private key、device-specific config、
+running-config backup を追加しない。NEC 公式 PDF、変換済み Markdown/TSV、ページ画像も各利用者の
+ローカルデータとして扱い、commit しない。
+
+### Claude Code へのインストール
 
 `~/.claude/skills/` の下へ clone する。`.claude-plugin/plugin.json` を持つディレクトリは
 skills-dir plugin として次のセッションから自動で載るので、marketplace も install 手続きも要らない。
@@ -63,16 +73,63 @@ skill には plugin 名の名前空間が付いて `/ix-toolkit:ix-show` にな�
 `~/.claude/skills/` 直下の `ix-show` / `ix-manual` / `ix-backup` / `ix-configure` / `ix-save`
 の 5 ディレクトリと `ix-ssh.py`。
 
-接続先はインベントリ `~/.claude/ix-devices.json` に定義する。**このリポジトリには含まれない。**
+既存の接続先インベントリ `~/.claude/ix-devices.json` は引き続き利用できる。共通の解決順と
+新規配置は後述する。**インベントリはこのリポジトリには含まれない。**
+
+### Codex へのインストール
+
+この repository 自体を Codex の workspace として開く場合は、`.agents/skills/` の5つの
+adapter が自動検出される。adapter は `skills/` の共通手順を読むため、手順本文の複製はない。
+
+任意の workspace から使う場合は repository を `$CODEX_HOME`（未設定時は `$HOME/.codex`）
+配下へ clone し、各 adapter を skills directory へ symlink する。adapter は symlink の実体を
+解決して repository root を求めるため、`scripts/` も同じ clone から利用できる。
+
+```console
+$ git clone https://github.com/yuu61/ix-toolkit $HOME/.codex/ix-toolkit
+$ for skill in ix-show ix-manual ix-backup ix-configure ix-save; do \
+    ln -s "$HOME/.codex/ix-toolkit/.agents/skills/$skill" "$HOME/.codex/skills/$skill"; \
+  done
+```
+
+Windows PowerShell では管理者権限の不要な junction を使える。
+
+```powershell
+git clone https://github.com/yuu61/ix-toolkit "$HOME/.codex/ix-toolkit"
+"ix-show", "ix-manual", "ix-backup", "ix-configure", "ix-save" | ForEach-Object {
+  New-Item -ItemType Junction -Path "$HOME/.codex/skills/$_" -Target "$HOME/.codex/ix-toolkit/.agents/skills/$_"
+}
+```
+
+更新は clone 側で `git pull` する。5つの skill は次の Codex セッションから利用できる。
+
+### 共通依存
+
+Claude Code / Codex のどちらも `uv` を PATH から実行し、`scripts/ix-ssh.py` の PEP 723
+metadata に従って Python 3.10 以上、netmiko、paramiko を用意する。上記 Claude Code 節の
+venv 手順も共通で利用できる。
+
+### inventory
+
+接続先はローカルの inventory に定義する。解決順は次のとおり。
+
+1. `--inventory <path>`（内部的に `$IX_INVENTORY` と同じ override）
+2. `$IX_INVENTORY`
+3. `$XDG_CONFIG_HOME/ix-toolkit/ix-devices.json`（未設定時は `~/.config/ix-toolkit/ix-devices.json`）
+4. 後方互換の `~/.claude/ix-devices.json`
+5. 初期の単体 script 配置との互換用 `scripts/ix-devices.json`（非推奨・gitignore 対象）
+
+既存の Claude Code 利用者は移動せずそのまま使える。新規構成では agent-neutral path を推奨する。
+inventory、秘密鍵、backup、実機 config は repository 内へ置かない。
 
 ```json
 {
   "devices": {
-    "home": {
+    "router-a": {
       "host": "192.0.2.1",
-      "username": "admin",
-      "password": "...",
-      "note": "IX2215 / WAN は GigaEthernet0.0"
+      "username": "operator",
+      "password_env": "IX_PASS_ROUTER_A",
+      "note": "example device"
     }
   }
 }
@@ -81,7 +138,7 @@ skill には plugin 名の名前空間が付いて `/ix-toolkit:ix-show` にな�
 `host` は IP でも `~/.ssh/config` のエイリアスでもよく、`ProxyJump` の踏み台も自動で辿る。
 
 ```console
-$ uv run --script $HOME/.claude/skills/ix-toolkit/scripts/ix-ssh.py --list   # 登録済み機器の一覧
+$ uv run --script <ix-toolkitのclone先>/scripts/ix-ssh.py --list   # 登録済み機器の一覧
 ```
 
 **既定機器は無い。** `--device` を省略するとエラーになる。設定が意図しない機器へ流れ込む
@@ -114,14 +171,16 @@ $ go install github.com/yuu61/ix-toolkit/cmd/pdfbook@latest
 $ pdfbook fetch -manifest manifest.json -out pdf/
 $ pdfbook probe pdf/CRM-ver10.11-1.1.pdf -out profiles/nec-ix-crm.json
 $ pdfbook md    pdf/CRM-ver10.11-1.1.pdf -profile profiles/nec-ix-crm.json \
-                -out ~/.claude/ix-manuals/crm
+                -out ~/.local/share/ix-toolkit/manuals/crm
 ```
 
-`/ix-manual` は `~/.claude/ix-manuals/*/*.tsv` を探すので、そこへ出力すれば
-そのまま引ける。852 ページで 8 秒ほど。
+`/ix-manual` の corpus root は `$IX_MANUALS`、`$XDG_DATA_HOME/ix-toolkit/manuals`
+（未設定時は `~/.local/share/ix-toolkit/manuals`）、後方互換の
+`~/.claude/ix-manuals` の順に解決する。既存の Claude Code 利用者は移動不要。
+新規構成では agent-neutral path へ出力する。852 ページで 8 秒ほど。
 
 ```
-~/.claude/ix-manuals/crm/
+~/.local/share/ix-toolkit/manuals/crm/
 ├── commands.tsv      command / entry / file / line / pdfpage のタブ区切り索引
 ├── index.md          章・節の目次
 ├── README.md         生成条件と出典
@@ -155,7 +214,7 @@ $ pdfbook md    pdf/CRM-ver10.11-1.1.pdf -profile profiles/nec-ix-crm.json \
 ```console
 $ pdfbook probe pdf/FD-ver10.11-1.1.pdf -out profiles/nec-ix-fd.json
 $ pdfbook md    pdf/FD-ver10.11-1.1.pdf -profile profiles/nec-ix-fd.json \
-                -out ~/.claude/ix-manuals/fd
+                -out ~/.local/share/ix-toolkit/manuals/fd
 ```
 
 1208 ページで 7 秒ほど。索引は `sections.tsv`（`section` / `title` / `file` / `line` /
@@ -182,10 +241,10 @@ $ pdfbook md    pdf/FD-ver10.11-1.1.pdf -profile profiles/nec-ix-fd.json \
 環境には**入っていない**。まず `pdftoppm -v` で確かめること。
 
 ```console
-$ mkdir -p ~/.claude/ix-manuals/fd/figures
-$ pdftoppm -png -r 150 pdf/FD-ver10.11-1.1.pdf ~/.claude/ix-manuals/fd/figures/p
+$ mkdir -p ~/.local/share/ix-toolkit/manuals/fd/figures
+$ pdftoppm -png -r 150 pdf/FD-ver10.11-1.1.pdf ~/.local/share/ix-toolkit/manuals/fd/figures/p
 $ pdfbook md pdf/FD-ver10.11-1.1.pdf -profile profiles/nec-ix-fd.json \
-             -out ~/.claude/ix-manuals/fd
+             -out ~/.local/share/ix-toolkit/manuals/fd
 ```
 
 **順序が要る。** 変換時に `figures/` を見るので、焼く前に変換するとリンクは付かない。
@@ -203,7 +262,7 @@ $ pdfbook md pdf/FD-ver10.11-1.1.pdf -profile profiles/nec-ix-fd.json \
 361 ページほど）。
 
 ```console
-$ pdftoppm -png -r 150 -f 1050 -l 1060 pdf/FD-ver10.11-1.1.pdf ~/.claude/ix-manuals/fd/figures/p
+$ pdftoppm -png -r 150 -f 1050 -l 1060 pdf/FD-ver10.11-1.1.pdf ~/.local/share/ix-toolkit/manuals/fd/figures/p
 ```
 
 要るのは抽出ではなくページ描画で、`pdfimages` は図 1 枚が網掛けの小片にばらけるので使えない。

@@ -1,7 +1,7 @@
 ---
 name: ix-show
 description: NEC IX の show コマンドを実行して状態を確認する（インターフェース, ルーティング, IPsec, ログ等）。対象機器は --device で指定する。ユーザーが NEC IX の状態確認・表示を求めたときに使用する
-argument-hint: "[機器名] <show コマンド> (e.g., home show ip route)"
+argument-hint: "[機器名] <show コマンド> (e.g., router-a show ip route)"
 allowed-tools:
   - Bash(uv:*)
   - Bash(python:*)
@@ -12,9 +12,11 @@ allowed-tools:
 
 `${CLAUDE_PLUGIN_ROOT}/scripts/ix-ssh.py`（netmiko `nec_ix_ssh`）経由で NEC IX の show コマンドを実行する。**読み取り専用**。
 
+`${CLAUDE_PLUGIN_ROOT}` は Claude Code が設定する。Codex では adapter の指示に従って ix-toolkit repository root の絶対パスへ置き換える。カレントディレクトリから推測しない。
+
 ## 接続先の指定
 
-機器はインベントリ `~/.claude/ix-devices.json` に定義し、`--device <名前>`（短縮 `-d`）で選ぶ。**既定機器は無い**。指定を省略するとスクリプトはエラーを返し、機器一覧を表示する（誤った機器への接続を防ぐため）。
+機器はインベントリに定義し、`--device <名前>`（短縮 `-d`）で選ぶ。場所は `--inventory` / `$IX_INVENTORY`、`~/.config/ix-toolkit/ix-devices.json`、legacy `~/.claude/ix-devices.json` の順。**既定機器は無い**。指定を省略するとスクリプトはエラーを返し、機器一覧を表示する（誤った機器への接続を防ぐため）。
 
 対象が不明・未確定のときは推測せず、まず一覧を出してユーザーに確認する:
 
@@ -38,7 +40,7 @@ uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/ix-ssh.py --host <IP/ホスト名>
 
 `$ARGUMENTS` の先頭トークンが `show` で始まらない場合、それを**機器名**として `--device` に渡し、残りを show コマンドとして扱う。
 
-- `/ix-show home show ip route` → `-d home "show ip route"`
+- `/ix-show router-a show ip route` → `-d router-a "show ip route"`
 - `/ix-show show ip route` → 機器名なし。会話中で対象機器が既に確定していればそれを使う。確定していなければ `--list` を実行して候補を提示し、ユーザーに選ばせる。
 
 show コマンドは `"show ..."` 全体を 1 つの引数として渡す（複数指定可）。

@@ -12,9 +12,11 @@ allowed-tools:
 
 `${CLAUDE_PLUGIN_ROOT}/scripts/ix-ssh.py --backup` で running-config を取得してファイルに保存する。**読み取り専用**。スクリプトが親ディレクトリ作成・タイムスタンプ既定名・UTF-8 書き込みまで行うため、`mkdir` やシェルリダイレクトは不要（単一の python コマンドで完結）。
 
+`${CLAUDE_PLUGIN_ROOT}` は Claude Code が設定する。Codex では adapter の指示に従って ix-toolkit repository root の絶対パスへ置き換える。カレントディレクトリから推測しない。
+
 ## 接続先の指定
 
-機器はインベントリ `~/.claude/ix-devices.json` に定義し、`--device <名前>`（短縮 `-d`）で選ぶ。**既定機器は無い**。省略するとエラーと機器一覧が返る。
+機器はインベントリに定義し、`--device <名前>`（短縮 `-d`）で選ぶ。場所は `--inventory` / `$IX_INVENTORY`、`~/.config/ix-toolkit/ix-devices.json`、legacy `~/.claude/ix-devices.json` の順。**既定機器は無い**。省略するとエラーと機器一覧が返る。
 
 対象が不明なときは推測せず、まず一覧を出してユーザーに確認する:
 
@@ -32,8 +34,8 @@ uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/ix-ssh.py --list
 
 `$ARGUMENTS` の第 1 トークンを**機器名**、残りがあれば**保存先パス**として扱う。
 
-- `/ix-backup home` → `-d home --backup`（既定名に保存）
-- `/ix-backup home backups/before-change.conf` → 保存先を明示
+- `/ix-backup router-a` → `-d router-a --backup`（既定名に保存）
+- `/ix-backup router-a backups/before-change.conf` → 保存先を明示
 - 機器名が無い場合 → `--list` で候補を提示し、ユーザーに選ばせる（会話中で対象機器が既に確定していればそれを使う）
 
 既定の保存先は `backups/<機器名>-<YYYYMMDD-HHMMSS>.conf`（機器名はインベントリのキー、`--host` 直指定時はホスト名）。カレントディレクトリ基準の相対パスなので、複数機器を扱っても取り違えない。

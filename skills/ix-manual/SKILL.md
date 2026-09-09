@@ -24,10 +24,16 @@ allowed-tools:
 
 ## マニュアルの置き場所
 
-`~/.claude/ix-manuals/` 配下。1 冊ごとにディレクトリがある。
+1 冊ごとにディレクトリがある。root は `$IX_MANUALS`、`$XDG_DATA_HOME/ix-toolkit/manuals`（未設定時は `~/.local/share/ix-toolkit/manuals`）、legacy `~/.claude/ix-manuals` の順に解決する。
+
+Claude Code では `${CLAUDE_PLUGIN_ROOT}` をそのまま使う。Codex では adapter の指示から ix-toolkit repository root の絶対パスへ置き換え、次で実際の manual root を取得する:
+
+```bash
+uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/ix_paths.py manuals --require-existing
+```
 
 ```
-~/.claude/ix-manuals/crm/          ~/.claude/ix-manuals/fd/
+<manuals-root>/crm/                 <manuals-root>/fd/
 ├── commands.tsv                   ├── sections.tsv
 ├── index.md                       ├── index.md
 └── ch03-インタフェース編/NGN.md     ├── figures/p-1057.png ← 有る場合とない場合がある
@@ -37,7 +43,7 @@ allowed-tools:
 `fd/figures/` はページを画像にしたもので、**図について答えるときはここを見る**（後述）。
 用意されていないこともある。その場合の答え方も後述。
 
-まず `Glob` で `~/.claude/ix-manuals/*/*.tsv` を探し、必要な冊子が無ければ
+まず上記コマンドで root を解決し、`Glob` で `<manuals-root>/*/*.tsv` を探す。必要な冊子が無ければ
 **その旨をユーザーに伝えて止まる**（記憶からコマンドや諸元値を答えない）。
 
 未変換なら [ix-toolkit](https://github.com/yuu61/ix-toolkit) の `pdfbook` で生成する。
@@ -46,9 +52,9 @@ allowed-tools:
 ```
 pdfbook fetch -manifest manifest.json -out pdf/
 pdfbook md pdf/CRM-ver10.11-1.1.pdf -profile profiles/nec-ix-crm.json \
-           -out ~/.claude/ix-manuals/crm
+           -out <manuals-root>/crm
 pdfbook md pdf/FD-ver10.11-1.1.pdf  -profile profiles/nec-ix-fd.json \
-           -out ~/.claude/ix-manuals/fd
+           -out <manuals-root>/fd
 ```
 
 ## 引き方（必ずこの順序で）
@@ -59,7 +65,7 @@ pdfbook md pdf/FD-ver10.11-1.1.pdf  -profile profiles/nec-ix-fd.json \
 1 行 1 コマンドで、コマンド名がそのまま先頭列にある。
 
 ```
-Grep: pattern="^ngn ip enable\t" path="~/.claude/ix-manuals/crm/commands.tsv"
+Grep: pattern="^ngn ip enable\t" path="<manuals-root>/crm/commands.tsv"
 ```
 
 綴りが不確かなときは部分一致で候補を出す（`ngn.*history`, `^ipsec ` など）。
@@ -72,7 +78,7 @@ Grep: pattern="^ngn ip enable\t" path="~/.claude/ix-manuals/crm/commands.tsv"
 丸ごと開くと 1 コマンドを引くために 1 冊分の節を読むことになる。
 
 ```
-Read: file_path="~/.claude/ix-manuals/crm/<file>" offset=<line> limit=30
+Read: file_path="<manuals-root>/crm/<file>" offset=<line> limit=30
 ```
 
 `limit=30` で足りることがほとんどだが、`ノート` の途中で切れていたら
@@ -94,7 +100,7 @@ Read: file_path="~/.claude/ix-manuals/crm/<file>" offset=<line> limit=30
 コマンド名で当たらなければ、本文を日本語で全文検索する。
 
 ```
-Grep: pattern="ヒストリ" path="~/.claude/ix-manuals/crm" glob="*.md" output_mode="content"
+Grep: pattern="ヒストリ" path="<manuals-root>/crm" glob="*.md" output_mode="content"
 ```
 
 それでも無ければ「このマニュアルには記載が無い」と答える。
@@ -108,7 +114,7 @@ Grep: pattern="ヒストリ" path="~/.claude/ix-manuals/crm" glob="*.md" output_
 `title` は見出し語。**見出し語を部分一致で探すのが基本。**
 
 ```
-Grep: pattern="VLAN" path="~/.claude/ix-manuals/fd/sections.tsv"
+Grep: pattern="VLAN" path="<manuals-root>/fd/sections.tsv"
 ```
 
 節番号が分かっているなら `^2\.7\.2\t` で直接引く。
@@ -152,16 +158,16 @@ IX2000/IX3000     ストリーム      PIM ルータ
 ```
 
 `[ページ画像]` のパスを `Read` で開き、**描かれた図そのものを見て答える。**
-リンクは本文ファイルからの相対パスなので、`../` を `~/.claude/ix-manuals/fd/` に読み替える。
+リンクは本文ファイルからの相対パスなので、`../` を `<manuals-root>/fd/` に読み替える。
 
 ```
-Read: file_path="~/.claude/ix-manuals/fd/figures/p-1057.png"
+Read: file_path="<manuals-root>/fd/figures/p-1057.png"
 ```
 
 **ファイル名はリンクに書かれている綴りをそのまま使う。ページ番号から組み立てない。**
 桁数とハイフンは焼き方で変わり（`p-1057.png` / `p-001057.png` / `p1057.png`）、
 組み立てるとほぼ確実に存在しないパスになる。開けなかったら名前を推測して再試行せず、
-`Glob` で `~/.claude/ix-manuals/fd/figures/*1057*` を確かめる。
+`Glob` で `<manuals-root>/fd/figures/*1057*` を確かめる。
 
 囲みのテキストは捨てない。**画像で向きと包含を取り、囲みで語の綴りを取る。**
 画像は縮小されて渡るので、細かいラベルが読めなければそう言う。読めたふりをしない。
@@ -169,7 +175,7 @@ Read: file_path="~/.claude/ix-manuals/fd/figures/p-1057.png"
 **ページ画像が無い場合** — 出所が `<sup>[元 PDF pNNN](...)</sup>` だけのとき。
 `figures/` が用意されていないか、そのページが焼かれていない。このときは
 **断片から構成を組み立てず**、`元 PDF pNNN` を示して「この図は版面を見ないと向きが
-分からない」と伝える。ページ画像を用意する方法は `~/.claude/ix-manuals/fd/README.md`
+分からない」と伝える。ページ画像を用意する方法は `<manuals-root>/fd/README.md`
 に書いてある。
 
 ## 報告のしかた
