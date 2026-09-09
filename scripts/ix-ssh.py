@@ -6,8 +6,8 @@
 """Run commands on a NEC IX router (IX OS 10.x) over SSH using netmiko's nec_ix driver.
 
 Device-agnostic: no host, credential or model is baked into this file. Targets are
-resolved from an inventory file (default ~/.claude/ix-devices.json) via --device, or
-given inline with --host/--user. The ix-* skills call this as ${CLAUDE_PLUGIN_ROOT}/scripts/ix-ssh.py.
+resolved from an inventory file via --device, or given inline with --host/--user.
+The ix-* skills resolve this script from their installed ix-toolkit repository.
 
 Usage:
     # list the configured devices (never prints passwords):
@@ -15,45 +15,46 @@ Usage:
 
     # show commands. NEC IX runs running-config and most feature shows only inside
     # "config/enable" mode, so every show is executed there. Paging is auto-off.
-    uv run --script ix-ssh.py --device home-ix3315 "show version"
-    uv run --script ix-ssh.py -d home-ix3315 "show ip route" "show interfaces"
+    uv run --script ix-ssh.py --device router-a "show version"
+    uv run --script ix-ssh.py -d router-a "show ip route" "show interfaces"
 
     # ad-hoc target without an inventory entry:
     uv run --script ix-ssh.py --host 192.0.2.1 --user admin "show running-config"
 
     # "host" may be a ~/.ssh/config alias; ProxyJump is followed automatically:
-    uv run --script ix-ssh.py --host room1 --user admin "show version"
+    uv run --script ix-ssh.py --host example-router --user admin "show version"
 
     # config changes (DESTRUCTIVE - confirm before running). Each --config is one
     # line; multiple are applied in a single config session.
-    uv run --script ix-ssh.py -d home-ix3315 \
+    uv run --script ix-ssh.py -d router-a \
         --config "ip route default GigaEthernet1.0" \
         --config "logging buffered 100" \
         --save
 
     # apply a batch of config lines from a file (one per line; # comments allowed):
-    uv run --script ix-ssh.py -d home-ix3315 --config-file changes.ix --save
+    uv run --script ix-ssh.py -d router-a --config-file changes.ix --save
 
     # persist running-config to startup (write memory):
-    uv run --script ix-ssh.py -d home-ix3315 --save
+    uv run --script ix-ssh.py -d router-a --save
 
     # back up running-config to a file (parent dirs auto-created; default name is
     # backups/<device>-<YYYYMMDD-HHMMSS>.conf):
-    uv run --script ix-ssh.py -d home-ix3315 --backup
-    uv run --script ix-ssh.py -d home-ix3315 --backup backups/before-change.conf
+    uv run --script ix-ssh.py -d router-a --backup
+    uv run --script ix-ssh.py -d router-a --backup backups/before-change.conf
 
     # clean output without "===== cmd =====" headers (for redirection):
-    uv run --script ix-ssh.py -d home-ix3315 --raw "show running-config" > ix.conf
+    uv run --script ix-ssh.py -d router-a --raw "show running-config" > ix.conf
 
-Inventory (JSON, default ~/.claude/ix-devices.json, override with $IX_INVENTORY or
---inventory). Keys starting with "_" are ignored, so they can hold comments:
+Inventory (JSON, override with --inventory or $IX_INVENTORY; otherwise use
+~/.config/ix-toolkit/ix-devices.json, then legacy ~/.claude/ix-devices.json).
+Keys starting with "_" are ignored, so they can hold comments:
 
     {
       "devices": {
-        "home-ix3315": {
+        "router-a": {
           "host": "192.0.2.1",
           "username": "admin",
-          "password_env": "IX_PASS_HOME",
+          "password_env": "IX_PASS_ROUTER_A",
           "port": 22,
           "note": "free-form; shown by --list"
         }
@@ -120,16 +121,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ix_paths import INVENTORY_ENV, inventory_path
+
 DEFAULT_PORT = 22
 READ_TIMEOUT = 120
 
 DEFAULT_SSH_CONFIG = str(Path.home() / ".ssh" / "config")
-
-INVENTORY_ENV = "IX_INVENTORY"
-INVENTORY_CANDIDATES = (
-    Path.home() / ".claude" / "ix-devices.json",
-    Path(__file__).resolve().parent / "ix-devices.json",
-)
 
 _HOST_KEYS = ("host", "hostname", "address", "ip")
 _USER_KEYS = ("username", "user")
@@ -138,19 +135,8 @@ _USER_KEYS = ("username", "user")
 # --------------------------------------------------------------------------- #
 # inventory
 # --------------------------------------------------------------------------- #
-def inventory_path() -> Path | None:
-    """Path of the inventory to use, or None when no candidate exists."""
-    env = os.environ.get(INVENTORY_ENV)
-    if env:
-        return Path(env).expanduser()
-    for cand in INVENTORY_CANDIDATES:
-        if cand.is_file():
-            return cand
-    return None
-
-
 def load_inventory() -> tuple[dict, Path | None]:
-    path = inventory_path()
+    path = inventory_path(script_dir=Path(__file__).resolve().parent)
     if path is None:
         return {}, None
     if not path.is_file():
@@ -442,7 +428,7 @@ def resolve_target(args) -> Target:
         sys.exit(f'ERROR: no host for {name!r} (add "host" to the inventory entry)')
 
     # "host" may be an ssh_config alias: resolve hostname/port/user through it and
-    # collect the ProxyJump chain, so an entry can be just {"host": "room1"}.
+    # collect the ProxyJump chain, so an entry can be just {"host": "example-router"}.
     alias = host
     ssh_cfg = None
     hops: list[str] = []
