@@ -7,14 +7,19 @@ from pathlib import Path
 
 # Upper bound for icacls when the file sits on a hung network share.
 ICACLS_TIMEOUT = 10
+TRUSTED_WINDOWS_USERS_ENV = "IX_SSH_TRUSTED_WINDOWS_USERS"
 
 
 def restrict_to_owner(path: Path) -> bool:
-    """Best effort: make `path` readable and writable by the current user only
-    (chmod 600 on POSIX, an owner-only DACL on Windows). Returns False instead of
-    raising when the platform or filesystem will not allow it (vfat, some CIFS
-    mounts, icacls missing): the caller has already written the file, so this is
-    never a write failure."""
+    """Best effort: make `path` readable and writable by the current user only.
+
+    On POSIX this is chmod 600. On Windows the file owner can remain different
+    from the process account (for example when Codex runs under its sandbox
+    account), so the DACL may contain both the owner and current process user.
+    Returns False instead of raising when the platform or filesystem will not
+    allow it (vfat, some CIFS mounts, icacls missing): the caller has already
+    written the file, so this is never a write failure.
+    """
     try:
         if os.name != "nt":
             os.chmod(path, 0o600)
@@ -24,8 +29,15 @@ def restrict_to_owner(path: Path) -> bool:
             # icacls happily grants ":F" to the BUILTIN domain and strips every
             # other ACE, locking the owner out; refuse rather than guess.
             return False
+        users = _deduplicated_windows_users([user, *_trusted_windows_users()])
         proc = subprocess.run(
-            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"],
+            [
+                "icacls",
+                str(path),
+                "/inheritance:r",
+                "/grant:r",
+                *(f"{account}:F" for account in users),
+            ],
             capture_output=True,
             check=False,
             timeout=ICACLS_TIMEOUT,
@@ -42,7 +54,9 @@ def fix_command(path: Path) -> str:
     if os.name != "nt":
         return f'chmod 600 "{path.absolute()}"'
     user = _current_windows_user() or "%USERNAME%"
-    return f'icacls "{path.absolute()}" /inheritance:r /grant:r "{user}:F"'
+    users = _deduplicated_windows_users([user, *_trusted_windows_users()])
+    grants = " ".join(f'"{account}:F"' for account in users)
+    return f'icacls "{path.absolute()}" /inheritance:r /grant:r {grants}'
 
 
 def _current_windows_user() -> str:
@@ -52,6 +66,126 @@ def _current_windows_user() -> str:
         return os.getlogin()
     except OSError:
         return os.environ.get("USERNAME", "")
+
+
+def _trusted_windows_users() -> list[str]:
+    """Return the explicit Windows executor allowlist without duplicates."""
+    return _deduplicated_windows_users(
+        account.strip()
+        for account in os.environ.get(TRUSTED_WINDOWS_USERS_ENV, "").split(";")
+        if account.strip()
+    )
+
+
+def _deduplicated_windows_users(accounts) -> list[str]:
+    """Preserve account order while de-duplicating case-insensitively."""
+    result = []
+    seen = set()
+    for account in accounts:
+        key = account.casefold()
+        if key not in seen:
+            seen.add(key)
+            result.append(account)
+    return result
+
+
+def _windows_account_sid(account: str) -> str:
+    """Resolve a Windows account name to a SID, or return an empty string.
+
+    Account names come either from the current process identity or the explicit
+    ``IX_SSH_TRUSTED_WINDOWS_USERS`` allowlist. Unresolvable names never broaden
+    the permission policy.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    if os.name != "nt" or not account:
+        return ""
+
+    advapi32 = ctypes.windll.advapi32
+    kernel32 = ctypes.windll.kernel32
+
+    advapi32.LookupAccountNameW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.LookupAccountNameW.restype = wintypes.BOOL
+    advapi32.ConvertSidToStringSidW.argtypes = [
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.LPWSTR),
+    ]
+    advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+
+    sid_size = wintypes.DWORD()
+    domain_size = wintypes.DWORD()
+    sid_type = wintypes.DWORD()
+    advapi32.LookupAccountNameW(
+        None,
+        account,
+        None,
+        ctypes.byref(sid_size),
+        None,
+        ctypes.byref(domain_size),
+        ctypes.byref(sid_type),
+    )
+    if not sid_size.value:
+        return ""
+
+    sid = ctypes.create_string_buffer(sid_size.value)
+    domain = ctypes.create_unicode_buffer(max(domain_size.value, 1))
+    if not advapi32.LookupAccountNameW(
+        None,
+        account,
+        sid,
+        ctypes.byref(sid_size),
+        domain,
+        ctypes.byref(domain_size),
+        ctypes.byref(sid_type),
+    ):
+        return ""
+
+    sid_str = wintypes.LPWSTR()
+    if not advapi32.ConvertSidToStringSidW(sid, ctypes.byref(sid_str)):
+        return ""
+    try:
+        return sid_str.value
+    finally:
+        kernel32.LocalFree(ctypes.cast(sid_str, wintypes.HLOCAL))
+
+
+def _current_windows_user_sid() -> str:
+    """Return the SID for the account running this process, or an empty string."""
+    return _windows_account_sid(_current_windows_user())
+
+
+def _trusted_windows_user_sids() -> set[str]:
+    """Resolve explicitly trusted Windows executor accounts from the environment.
+
+    A semicolon-delimited allowlist supports hosts where the same automation is
+    run by two isolated identities (for example a sandbox account and its
+    approved network-capable account) without permitting a group or disabling
+    the permission check globally.
+    """
+    return {
+        sid
+        for account in _trusted_windows_users()
+        if (sid := _windows_account_sid(account))
+    }
+
+
+def _allowed_windows_sids(owner_sid: str) -> set[str]:
+    """SIDs that may have an allow ACE on a sensitive local file."""
+    allowed = {"S-1-5-18", "S-1-5-32-544", owner_sid}
+    current_user_sid = _current_windows_user_sid()
+    if current_user_sid:
+        allowed.add(current_user_sid)
+    allowed.update(_trusted_windows_user_sids())
+    return allowed
 
 
 def is_secure_file(path: Path) -> bool:
@@ -152,8 +286,9 @@ def _is_secure_windows(path: str) -> bool:
         owner_sid = owner_sid_str.value
         kernel32.LocalFree(ctypes.cast(owner_sid_str, wintypes.HLOCAL))
 
-        # Well-known SIDs: SYSTEM, Administrators, and the Owner
-        allowed_sids = {"S-1-5-18", "S-1-5-32-544", owner_sid}
+        # Well-known SIDs, the owner, and the account running this process.
+        # The latter can differ from the owner in sandboxed agent environments.
+        allowed_sids = _allowed_windows_sids(owner_sid)
 
         if not pDacl:
             return False  # No DACL means everyone has access
